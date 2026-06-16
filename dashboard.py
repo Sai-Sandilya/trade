@@ -970,7 +970,11 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
                 x=_dates + _dates[::-1],
                 y=_highs + _lows[::-1],
                 fill="toself",
-                fillcolor=_bias_color + "33",
+                fillcolor="rgba({},{},{},0.15)".format(
+                    int(_bias_color[1:3], 16),
+                    int(_bias_color[3:5], 16),
+                    int(_bias_color[5:7], 16),
+                ),
                 line=dict(color="rgba(0,0,0,0)"),
                 hoverinfo="skip",
                 name="Range",
