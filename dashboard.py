@@ -958,23 +958,21 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
             expanded=True,
         ):
             _daily = _wf["daily"]
-            _dates = [d["label"] for d in _daily]
-            _lows  = [d["low"]   for d in _daily]
-            _mids  = [d["mid"]   for d in _daily]
-            _highs = [d["high"]  for d in _daily]
+
+            # -- Range band chart ----------------------------------------------
+            _dates  = [d["label"] for d in _daily]
+            _lows   = [d["low"]   for d in _daily]
+            _mids   = [d["mid"]   for d in _daily]
+            _highs  = [d["high"]  for d in _daily]
 
             _fig_w = go.Figure()
 
-            # Shaded range band
+            # Shaded range band (high → low filled area)
             _fig_w.add_trace(go.Scatter(
                 x=_dates + _dates[::-1],
                 y=_highs + _lows[::-1],
                 fill="toself",
-                fillcolor="rgba({},{},{},0.15)".format(
-                    int(_bias_color[1:3], 16),
-                    int(_bias_color[3:5], 16),
-                    int(_bias_color[5:7], 16),
-                ),
+                fillcolor=_bias_color + "33",
                 line=dict(color="rgba(0,0,0,0)"),
                 hoverinfo="skip",
                 name="Range",
@@ -988,7 +986,7 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
                 name="High",
                 hovertemplate="High: $%{y:,.2f}<extra></extra>",
             ))
-            # Mid bias line
+            # Mid (bias) line
             _fig_w.add_trace(go.Scatter(
                 x=_dates, y=_mids,
                 mode="lines+markers+text",
@@ -1008,13 +1006,14 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
                 name="Low",
                 hovertemplate="Low: $%{y:,.2f}<extra></extra>",
             ))
-            # Last close reference
+            # Last close reference line
             _fig_w.add_hline(
                 y=_wf["last_close"],
                 line_dash="dash", line_color="white", line_width=1, opacity=0.4,
                 annotation_text=f"Last close ${_wf['last_close']:,.2f}",
                 annotation_position="bottom right",
             )
+
             _fig_w.update_layout(
                 title=f"{_ticker} — 5-Day Price Range Projection",
                 yaxis_title="Price (USD)",
@@ -1025,7 +1024,7 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
             )
             st.plotly_chart(_fig_w, width="stretch")
 
-            # Day-by-day table
+            # -- Day-by-day table ----------------------------------------------
             _tbl = pd.DataFrame(_daily)[["label", "low", "mid", "high"]]
             _tbl.columns = ["Trading Day", "Expected Low", "Midpoint Bias", "Expected High"]
             for _col in ["Expected Low", "Midpoint Bias", "Expected High"]:
