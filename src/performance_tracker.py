@@ -91,12 +91,18 @@ def save_snapshot(
 
 
 def load_history() -> pd.DataFrame:
-    """Load all historical snapshots. Returns empty DataFrame if none yet."""
-    if not HIST_PATH.exists():
+    """Load all historical snapshots. Returns empty DataFrame if none yet or file is corrupt."""
+    if not HIST_PATH.exists() or HIST_PATH.stat().st_size == 0:
+        if HIST_PATH.exists():
+            HIST_PATH.unlink()   # delete the 0-byte file so next save starts clean
         return pd.DataFrame()
-    df = pd.read_parquet(HIST_PATH)
-    df["run_timestamp"] = pd.to_datetime(df["run_timestamp"], utc=True)
-    return df.sort_values("run_timestamp")
+    try:
+        df = pd.read_parquet(HIST_PATH)
+        df["run_timestamp"] = pd.to_datetime(df["run_timestamp"], utc=True)
+        return df.sort_values("run_timestamp")
+    except Exception:
+        HIST_PATH.unlink()       # delete corrupt file
+        return pd.DataFrame()
 
 
 def _count_runs(df: pd.DataFrame) -> int:
