@@ -38,3 +38,44 @@ metrics:
 
 dashboard:
   port: 8501                      # Streamlit server port
+
+# Portfolio presets for side-by-side comparison (used in Portfolio Comparison tab)
+portfolios:
+  conservative:
+    name: Conservative
+    monthly_budget_usd:   50.0
+    oversold_rsi:         30.0
+    below_sma_multiplier: 1.2
+    oversold_multiplier:  1.5
+    enable_exits:         false
+    color: "#2196F3"
+    description: "Low risk — small budget, only buys on deep crashes (RSI<30)"
+
+  balanced:
+    name: Balanced
+    monthly_budget_usd:   100.0
+    oversold_rsi:         35.0
+    below_sma_multiplier: 1.5
+    oversold_multiplier:  2.0
+    enable_exits:         false
+    color: "#4CAF50"
+    description: "Medium risk — standard DCA with RSI+SMA200 multipliers"
+
+  aggressive:
+    name: Aggressive
+    monthly_budget_usd:   200.0
+    oversold_rsi:         40.0
+    below_sma_multiplier: 2.0
+    oversold_multiplier:  3.0
+    enable_exits:         true
+    take_profit_pct:      0.40
+    stop_loss_pct:        0.15
+    enable_rebalance:     true
+    color: "#FF5722"
+    description: "High risk — large budget, aggressive multipliers, exits enabled"
+
+# Paper trading settings
+paper_trading:
+  enabled: false            # Set true to allow paper trades from the dashboard
+  log_path: data/paper_trades.csv
+  state_path: data/paper_portfolio.json

@@ -1164,6 +1164,252 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
         "A positive sentiment score does not mean the stock will rise."
     )
 
+    # -- Save performance snapshot after every backtest run -------------------
+    try:
+        from performance_tracker import save_snapshot
+        if raw_metrics:
+            save_snapshot(summary, raw_metrics, equity, cfg_label="Balanced")
+    except Exception:
+        pass
+
+    st.divider()
+
+    # =========================================================================
+    # PAPER TRADING
+    # =========================================================================
+
+    st.subheader("Paper Trading — Virtual Portfolio")
+    st.caption(
+        "Simulates the DCA bot against live prices without placing real orders. "
+        "Use this to validate the strategy before committing real capital. "
+        "State is saved between sessions — paper trades accumulate month by month."
+    )
+
+    from paper_trader import PaperTrader
+
+    _pt  = PaperTrader(cfg)
+    _ptl = _pt.trade_log()
+    _pt_summary = _pt.summary(_rt_prices if _rt_prices else None)
+
+    pt_col1, pt_col2 = st.columns([1, 1])
+
+    with pt_col1:
+        st.markdown("**Virtual Portfolio**")
+        if not _pt_summary.empty and _pt_summary["shares"].sum() > 0:
+            _pt_disp = _pt_summary.copy()
+            for _c in ["avg_cost_per_share", "live_price"]:
+                if _c in _pt_disp.columns:
+                    _pt_disp[_c] = _pt_disp[_c].map("${:,.4f}".format)
+            for _c in ["total_invested_usd", "market_value_usd", "unrealized_pnl_usd"]:
+                if _c in _pt_disp.columns:
+                    _pt_disp[_c] = _pt_disp[_c].map("${:,.2f}".format)
+            if "unrealized_pnl_pct" in _pt_disp.columns:
+                _pt_disp["unrealized_pnl_pct"] = _pt_disp["unrealized_pnl_pct"].map("{:+.2f}%".format)
+            st.dataframe(_pt_disp, width='stretch')
+        else:
+            st.info("No paper positions yet. Click **Simulate Paper Trade** to record the first virtual trade.")
+
+    with pt_col2:
+        st.markdown("**Controls**")
+        _force_paper = st.button("Simulate Paper Trade (force today)", key="paper_force")
+        _reset_paper = st.button("Reset Paper Portfolio", key="paper_reset", type="secondary")
+
+        if _force_paper:
+            with st.spinner("Running paper trade check..."):
+                _new_trades = _pt.run_check(live_prices=_rt_prices, force=True)
+            if _new_trades:
+                st.success(f"Recorded {len(_new_trades)} paper trade(s).")
+                for _tr in _new_trades:
+                    st.write(f"**{_tr['action']}** {_tr['ticker']} — "
+                             f"{_tr['shares']} shares @ ${_tr['price']:,.2f} "
+                             f"(trigger: {_tr['trigger']})")
+            else:
+                st.warning("No paper trades triggered.")
+            st.rerun()
+
+        if _reset_paper:
+            _pt.reset()
+            st.success("Paper portfolio reset to zero.")
+            st.rerun()
+
+        st.caption(
+            "**Simulate Paper Trade** forces today's trade regardless of calendar. "
+            "In production the scheduler runs this automatically on the last "
+            "trading day of each month."
+        )
+
+    if not _ptl.empty:
+        st.markdown("**Paper Trade Log**")
+        st.dataframe(_ptl, width='stretch', height=250, hide_index=True)
+        st.download_button(
+            "Download Paper Trade Log",
+            _ptl.to_csv(index=False).encode("utf-8"),
+            "paper_trades.csv", "text/csv",
+        )
+
+    st.divider()
+
+    # =========================================================================
+    # PERFORMANCE HISTORY
+    # =========================================================================
+
+    st.subheader("Performance History")
+    st.caption(
+        "Every time you run a backtest, a snapshot is saved here. "
+        "Over time this shows how your strategy parameters and portfolio value evolve."
+    )
+
+    from performance_tracker import load_history, monthly_equity_breakdown, portfolio_history_chart_data
+
+    _hist = load_history()
+    if _hist.empty:
+        st.info("No history yet — run a backtest to record the first snapshot.")
+    else:
+        _hist_chart = portfolio_history_chart_data(_hist)
+        if not _hist_chart.empty:
+            _fig_hist = go.Figure()
+            _fig_hist.add_trace(go.Scatter(
+                x=_hist_chart["run_timestamp"],
+                y=_hist_chart["market_value_usd"],
+                name="Portfolio Value",
+                mode="lines+markers",
+                line=dict(color="#9C27B0", width=2),
+                marker=dict(size=7),
+                hovertemplate="Run: %{x|%Y-%m-%d %H:%M}<br>Value: $%{y:,.0f}<extra></extra>",
+            ))
+            _fig_hist.update_layout(
+                title="Portfolio Value Across Backtest Runs",
+                yaxis_title="Portfolio Value (USD)",
+                xaxis_title="Backtest Run Date",
+                height=300,
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(_fig_hist, width='stretch')
+
+        _monthly = monthly_equity_breakdown(equity)
+        if not _monthly.empty:
+            st.markdown("**Month-by-Month P&L**")
+            _monthly_disp = _monthly.copy()
+            _monthly_disp["change_usd"] = _monthly_disp["change_usd"].map("${:+,.2f}".format)
+            _monthly_disp["change_pct"] = _monthly_disp["change_pct"].map("{:+.2f}%".format)
+            _monthly_disp["start_value"] = _monthly_disp["start_value"].map("${:,.2f}".format)
+            _monthly_disp["end_value"]   = _monthly_disp["end_value"].map("${:,.2f}".format)
+
+            def _colour_month(val):
+                if isinstance(val, str) and val.startswith("$+"):
+                    return "color: #4CAF50; font-weight:600"
+                if isinstance(val, str) and val.startswith("$-"):
+                    return "color: #F44336; font-weight:600"
+                return ""
+
+            _styled_monthly = _monthly_disp.style.map(_colour_month, subset=["change_usd"])
+            st.dataframe(_styled_monthly, width='stretch', hide_index=True, height=350)
+
+    st.divider()
+
+    # =========================================================================
+    # PORTFOLIO COMPARISON
+    # =========================================================================
+
+    st.subheader("Portfolio Comparison — Conservative vs Balanced vs Aggressive")
+    st.caption(
+        "Runs the same backtest period with three preset strategies side by side. "
+        "Useful for deciding how aggressively to invest based on your risk tolerance."
+    )
+
+    from portfolio_manager import PRESETS, run_comparison, comparison_equity_table, comparison_metrics_table
+
+    for _pname, _preset in PRESETS.items():
+        with st.expander(f"{_pname} — {_preset.description}"):
+            st.write("")
+
+    _run_comparison = st.button("Run Portfolio Comparison", key="run_comparison", type="primary")
+
+    if _run_comparison or "comparison_results" in st.session_state:
+        if _run_comparison:
+            with st.spinner("Running 3 backtests (Conservative / Balanced / Aggressive)..."):
+                _comp_results = run_comparison(
+                    list(PRESETS.keys()), active_tickers,
+                    start_date=str(start_date) if start_date else None,
+                    end_date=str(end_date) if end_date else None,
+                )
+                st.session_state["comparison_results"] = _comp_results
+
+        _comp_results = st.session_state["comparison_results"]
+
+        _comp_eq = comparison_equity_table(_comp_results)
+        if not _comp_eq.empty:
+            _fig_comp = go.Figure()
+            for _pname, _preset in PRESETS.items():
+                _col_name = f"{_pname}_usd"
+                if _col_name in _comp_eq.columns:
+                    _fig_comp.add_trace(go.Scatter(
+                        x=_comp_eq.index,
+                        y=_comp_eq[_col_name],
+                        name=_pname,
+                        line=dict(color=_preset.color, width=2),
+                    ))
+            _fig_comp.update_layout(
+                title="Equity Curves: Conservative vs Balanced vs Aggressive",
+                yaxis_title="Portfolio Value (USD)",
+                xaxis_title="Date",
+                hovermode="x unified",
+                height=420,
+                margin=dict(l=0, r=0, t=40, b=0),
+            )
+            st.plotly_chart(_fig_comp, width='stretch')
+
+        _comp_metrics = comparison_metrics_table(_comp_results)
+        if not _comp_metrics.empty:
+            st.markdown("**Side-by-Side Metrics**")
+            st.dataframe(_comp_metrics, width='stretch')
+
+    st.divider()
+
+    # =========================================================================
+    # EXPORT — Excel + PDF
+    # =========================================================================
+
+    st.subheader("Export Report")
+    st.caption("Download the full backtest results as Excel (multi-sheet) or PDF.")
+
+    from report_builder import build_excel_report, build_pdf_report
+
+    _exp1, _exp2 = st.columns(2)
+
+    with _exp1:
+        st.markdown("**Excel Report** — 5 sheets: Summary, Risk Metrics, Trade Log, Equity Curve, Monthly P&L")
+        if st.button("Generate Excel", key="gen_excel"):
+            with st.spinner("Building Excel workbook..."):
+                try:
+                    _xlsx = build_excel_report(summary, trade_log, equity, raw_metrics or {}, cfg_label="DCA Backtest")
+                    st.download_button(
+                        "Download Excel Report",
+                        _xlsx,
+                        file_name=f"dca_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        width='stretch',
+                    )
+                except Exception as _e:
+                    st.error(f"Excel build failed: {_e}")
+
+    with _exp2:
+        st.markdown("**PDF Report** — Summary table, risk metric cards, disclaimer")
+        if st.button("Generate PDF", key="gen_pdf"):
+            with st.spinner("Building PDF report..."):
+                try:
+                    _pdf = build_pdf_report(summary, raw_metrics or {}, cfg_label="DCA Backtest",
+                                            tickers=active_tickers)
+                    st.download_button(
+                        "Download PDF Report",
+                        _pdf,
+                        file_name=f"dca_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
+                        mime="application/pdf",
+                        width='stretch',
+                    )
+                except Exception as _e:
+                    st.error(f"PDF build failed: {_e}")
+
 # -- Landing screen ------------------------------------------------------------
 
 else:
