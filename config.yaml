@@ -1,0 +1,40 @@
+# config.yaml — Default strategy parameters for the DCA pipeline.
+# Edit this file to persist your preferred settings.
+# All values here are used as defaults in the dashboard and main.py.
+# Individual CLI flags (--budget, --start, --end) still override these.
+
+strategy:
+  monthly_budget_usd:     100.0   # Base investment per ticker per month (USD)
+  oversold_rsi:           35.0    # RSI(21) below this triggers 2x buy
+  rsi_period:             21      # RSI lookback window in trading days
+  sma_period:             200     # SMA trend-filter window in trading days
+  below_sma_multiplier:   1.5     # Budget multiplier when price < SMA200
+  oversold_multiplier:    2.0     # Budget multiplier when RSI < oversold_rsi
+  slippage_bps:           3.0     # Realistic transaction slippage (basis points)
+  clearing_fee_usd:       0.005   # Flat fee per trade (fractional-share platform)
+  min_hold_days:          15      # Minimum days between entry decisions
+  decimal_places:         6       # Fractional share precision
+
+  # Exit / sell settings
+  enable_exits:           false   # Set true to activate take-profit and stop-loss
+  take_profit_pct:        0.50    # Sell entire position when up 50% from avg cost
+  stop_loss_pct:          0.20    # Sell entire position when down 20% from avg cost
+
+  # Rebalancing settings
+  enable_rebalance:               false   # Set true to activate quarterly rebalancing
+  rebalance_threshold_pct:        0.10    # Trigger rebalance when any ticker drifts >10%
+  rebalance_frequency_months:     3       # Check every 3 months (quarterly)
+
+backtest:
+  tickers:
+    - SPY
+    - QQQ
+    - AMD
+  start_date: null                # null = each ticker's earliest date
+  end_date:   null                # null = latest available date
+
+metrics:
+  risk_free_rate: 0.04            # Annual risk-free rate for Sharpe/Sortino (4% = US T-bills)
+
+dashboard:
+  port: 8501                      # Streamlit server port
