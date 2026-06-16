@@ -89,11 +89,16 @@ def _score_signal(name: str, value, bullish_cond: bool, bearish_cond: bool) -> d
 
 # -- Main forecast function ----------------------------------------------------
 
-def forecast_ticker(ticker: str, sentiment_score: float | None = None) -> dict:
+def forecast_ticker(
+    ticker: str,
+    sentiment_score: float | None = None,
+    live_price: float | None = None,
+) -> dict:
     """
     sentiment_score: optional VADER composite score in [-1, +1] from sentiment.py.
-    When provided, a Sentiment signal is appended to the scorecard.
-    Only scores beyond ±0.15 move the signal — weak/mixed news stays Neutral.
+    live_price: optional real-time price from live_feed.py. When provided, overrides
+                the parquet last_close so the forecast base is always current — no
+                re-download needed to keep forecast and live feed in sync.
     """
     path = CLEAN_DIR / f"{ticker}_clean.parquet"
     if not path.exists():
@@ -112,7 +117,10 @@ def forecast_ticker(ticker: str, sentiment_score: float | None = None) -> dict:
     low    = df["Low"]
     volume = df["Volume"]
 
-    last_close = close.iloc[-1]
+    # Use live price as base when available — keeps forecast in sync with live feed
+    # without requiring a manual re-download. Historical indicators (RSI, SMA, etc.)
+    # still use the full parquet history for accuracy.
+    last_close = live_price if live_price is not None else float(close.iloc[-1])
     prev_close = close.iloc[-2]
     last_date  = df.index[-1].date()
 
@@ -320,12 +328,17 @@ def forecast_ticker(ticker: str, sentiment_score: float | None = None) -> dict:
     }
 
 
-def forecast_all(tickers=("SPY", "QQQ", "AMD"), use_sentiment: bool = True) -> dict:
+def forecast_all(
+    tickers=("SPY", "QQQ", "AMD"),
+    use_sentiment: bool = True,
+    live_prices: dict | None = None,
+) -> dict:
     """
     Run forecast for all tickers.
-    When use_sentiment=True (default), fetches live news sentiment from Yahoo Finance
-    and includes it as an additional signal in each ticker's scorecard.
-    Set use_sentiment=False to run purely on technical signals (faster, no network call).
+    use_sentiment: fetch live VADER sentiment and include as signal #11.
+    live_prices: dict of {ticker: price} from live_feed.fetch_all_live_prices().
+                 When provided, each ticker's forecast uses the live price as its
+                 base instead of the (potentially stale) parquet last close.
     """
     sentiment_scores: dict[str, float | None] = {}
     if use_sentiment:
@@ -338,10 +351,14 @@ def forecast_all(tickers=("SPY", "QQQ", "AMD"), use_sentiment: bool = True) -> d
                 if t in sent and "error" not in sent[t]
             }
         except Exception:
-            pass   # sentiment unavailable — degrade gracefully, TA signals still work
+            pass   # degrade gracefully — TA signals still work
 
     return {
-        t: forecast_ticker(t, sentiment_score=sentiment_scores.get(t))
+        t: forecast_ticker(
+            t,
+            sentiment_score=sentiment_scores.get(t),
+            live_price=live_prices.get(t, {}).get("price") if live_prices else None,
+        )
         for t in tickers
     }
 

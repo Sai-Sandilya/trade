@@ -814,7 +814,7 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
         "Use this as one input among many, never as a sole trading decision."
     )
 
-    forecasts = forecast_all(active_tickers, use_sentiment=True)
+    forecasts = forecast_all(active_tickers, use_sentiment=True, live_prices=_rt_prices)
 
     for ticker, f in forecasts.items():
         if "error" in f:
