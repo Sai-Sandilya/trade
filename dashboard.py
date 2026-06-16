@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from ingestion import ingest_all, TICKERS
 from pipeline import clean_all
 from bot import LongTermDCABot, BotConfig
-from forecast import forecast_all
+from forecast import forecast_all, weekly_forecast_all
 from metrics import compute_all, format_metrics, buy_and_hold_equity
 from sentiment import sentiment_all, sentiment_vs_price
 from live_feed import fetch_all_live_prices, is_market_open
@@ -921,6 +921,114 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
                 ],
             }
             st.dataframe(pd.DataFrame(ind_data), width='stretch', hide_index=True)
+
+    st.divider()
+
+    # -- Weekly Forecast -------------------------------------------------------
+
+    st.subheader("5-Day Weekly Forecast")
+    st.info(
+        f"Projecting the next **5 trading days** from {_last_data_date.strftime('%A, %B %d %Y')}, "
+        f"excluding weekends and US market holidays.  \n"
+        f"Price ranges widen by √t each day (random-walk variance scaling). "
+        f"Signal bias held constant from today's 11-signal consensus."
+    )
+    st.warning(
+        "This is a directional range estimate — NOT a day-by-day price prediction. "
+        "Do not use this as a sole basis for any trading decision."
+    )
+
+    _weekly = weekly_forecast_all(active_tickers, use_sentiment=True, live_prices=_rt_prices)
+
+    for _ticker, _wf in _weekly.items():
+        if "error" in _wf:
+            st.error(f"{_ticker}: {_wf['error']}")
+            continue
+
+        _bias_color = {
+            "Bullish": "#4CAF50", "Mildly Bullish": "#8BC34A",
+            "Bearish": "#F44336", "Mildly Bearish": "#FF7043",
+            "Neutral": "#9E9E9E",
+        }.get(_wf["overall_bias"], "#9E9E9E")
+
+        with st.expander(
+            f"{_ticker}  |  Base ${_wf['last_close']:,.2f}  |  "
+            f"Weekly Bias: {_wf['overall_bias']}  |  "
+            f"Confidence: {_wf['confidence_pct']}%",
+            expanded=True,
+        ):
+            _daily = _wf["daily"]
+            _dates = [d["label"] for d in _daily]
+            _lows  = [d["low"]   for d in _daily]
+            _mids  = [d["mid"]   for d in _daily]
+            _highs = [d["high"]  for d in _daily]
+
+            _fig_w = go.Figure()
+
+            # Shaded range band
+            _fig_w.add_trace(go.Scatter(
+                x=_dates + _dates[::-1],
+                y=_highs + _lows[::-1],
+                fill="toself",
+                fillcolor=_bias_color + "33",
+                line=dict(color="rgba(0,0,0,0)"),
+                hoverinfo="skip",
+                name="Range",
+            ))
+            # High line
+            _fig_w.add_trace(go.Scatter(
+                x=_dates, y=_highs,
+                mode="lines+markers",
+                line=dict(color=_bias_color, dash="dot", width=1),
+                marker=dict(size=6),
+                name="High",
+                hovertemplate="High: $%{y:,.2f}<extra></extra>",
+            ))
+            # Mid bias line
+            _fig_w.add_trace(go.Scatter(
+                x=_dates, y=_mids,
+                mode="lines+markers+text",
+                line=dict(color=_bias_color, width=2),
+                marker=dict(size=8),
+                text=[f"${v:,.2f}" for v in _mids],
+                textposition="top center",
+                name="Mid (bias)",
+                hovertemplate="Mid: $%{y:,.2f}<extra></extra>",
+            ))
+            # Low line
+            _fig_w.add_trace(go.Scatter(
+                x=_dates, y=_lows,
+                mode="lines+markers",
+                line=dict(color=_bias_color, dash="dot", width=1),
+                marker=dict(size=6),
+                name="Low",
+                hovertemplate="Low: $%{y:,.2f}<extra></extra>",
+            ))
+            # Last close reference
+            _fig_w.add_hline(
+                y=_wf["last_close"],
+                line_dash="dash", line_color="white", line_width=1, opacity=0.4,
+                annotation_text=f"Last close ${_wf['last_close']:,.2f}",
+                annotation_position="bottom right",
+            )
+            _fig_w.update_layout(
+                title=f"{_ticker} — 5-Day Price Range Projection",
+                yaxis_title="Price (USD)",
+                height=340,
+                margin=dict(l=0, r=0, t=40, b=20),
+                legend=dict(orientation="h", y=-0.15),
+                hovermode="x unified",
+            )
+            st.plotly_chart(_fig_w, width="stretch")
+
+            # Day-by-day table
+            _tbl = pd.DataFrame(_daily)[["label", "low", "mid", "high"]]
+            _tbl.columns = ["Trading Day", "Expected Low", "Midpoint Bias", "Expected High"]
+            for _col in ["Expected Low", "Midpoint Bias", "Expected High"]:
+                _tbl[_col] = _tbl[_col].apply(lambda v: f"${v:,.2f}")
+            st.dataframe(_tbl, hide_index=True, width="stretch")
+
+            st.caption(_wf.get("weekly_note", ""))
 
     st.divider()
 
