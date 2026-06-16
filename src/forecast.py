@@ -363,6 +363,127 @@ def forecast_all(
     }
 
 
+# ---------------------------------------------------------------------------
+# Weekly (5-trading-day) forecast
+# ---------------------------------------------------------------------------
+
+# US market holidays 2024-2030 (fixed + floating).
+_US_MARKET_HOLIDAYS = {
+    # New Year's Day
+    "2024-01-01","2025-01-01","2026-01-01","2027-01-01","2028-01-01","2029-01-01","2030-01-01",
+    # MLK Day (3rd Monday Jan)
+    "2024-01-15","2025-01-20","2026-01-19","2027-01-18","2028-01-17","2029-01-15","2030-01-21",
+    # Presidents' Day (3rd Monday Feb)
+    "2024-02-19","2025-02-17","2026-02-16","2027-02-15","2028-02-21","2029-02-19","2030-02-18",
+    # Good Friday
+    "2024-03-29","2025-04-18","2026-04-03","2027-03-26","2028-04-14","2029-03-30","2030-04-19",
+    # Memorial Day (last Monday May)
+    "2024-05-27","2025-05-26","2026-05-25","2027-05-31","2028-05-29","2029-05-28","2030-05-27",
+    # Juneteenth
+    "2024-06-19","2025-06-19","2026-06-19","2027-06-18","2028-06-19","2029-06-19","2030-06-19",
+    # Independence Day (observed when on weekend)
+    "2024-07-04","2025-07-04","2026-07-03","2027-07-05","2028-07-04","2029-07-04","2030-07-04",
+    # Labor Day (1st Monday Sep)
+    "2024-09-02","2025-09-01","2026-09-07","2027-09-06","2028-09-04","2029-09-03","2030-09-02",
+    # Thanksgiving (4th Thursday Nov)
+    "2024-11-28","2025-11-27","2026-11-26","2027-11-25","2028-11-23","2029-11-22","2030-11-28",
+    # Christmas (observed when on weekend)
+    "2024-12-25","2025-12-25","2026-12-25","2027-12-24","2028-12-25","2029-12-25","2030-12-25",
+}
+
+
+def _next_trading_days(from_date, n: int = 5) -> list:
+    """Return next n trading days after from_date, skipping weekends and US holidays."""
+    import datetime
+    days, current = [], from_date
+    while len(days) < n:
+        current += datetime.timedelta(days=1)
+        if current.weekday() >= 5:
+            continue
+        if str(current) in _US_MARKET_HOLIDAYS:
+            continue
+        days.append(current)
+    return days
+
+
+def weekly_forecast(
+    ticker: str,
+    sentiment_score: float | None = None,
+    live_price: float | None = None,
+) -> dict:
+    """
+    Project a 5-trading-day outlook. Range widens by sqrt(t) each day
+    (random-walk variance scaling). Bias direction held constant from
+    the 11-signal consensus. Returns base_forecast fields plus 'daily' list.
+    """
+    import datetime
+    import math
+
+    base = forecast_ticker(ticker, sentiment_score=sentiment_score, live_price=live_price)
+    if "error" in base:
+        return base
+
+    last_date    = datetime.date.fromisoformat(base["last_date"])
+    trading_days = _next_trading_days(last_date, n=5)
+
+    atr          = base["atr_14"]
+    mid0         = base["last_close"]
+    skew_per_day = (base["total_score"] / len(base["signals"])) * atr * 0.3
+
+    daily = []
+    for i, day in enumerate(trading_days, start=1):
+        scale = math.sqrt(i)
+        mid   = round(mid0 + skew_per_day * i, 2)
+        daily.append({
+            "day":   i,
+            "date":  str(day),
+            "label": day.strftime("%a %b %d"),
+            "low":   round(mid - atr * scale, 2),
+            "mid":   mid,
+            "high":  round(mid + atr * scale, 2),
+        })
+
+    return {
+        **base,
+        "trading_days": [str(d) for d in trading_days],
+        "daily":        daily,
+        "weekly_note": (
+            "Range widens by √t each day (random-walk scaling). "
+            "Bias direction held constant from current signal consensus. "
+            "This is NOT a day-by-day price prediction."
+        ),
+    }
+
+
+def weekly_forecast_all(
+    tickers=("SPY", "QQQ", "AMD"),
+    use_sentiment: bool = True,
+    live_prices: dict | None = None,
+) -> dict:
+    """Run weekly_forecast for all tickers with optional sentiment + live prices."""
+    sentiment_scores: dict[str, float | None] = {}
+    if use_sentiment:
+        try:
+            from sentiment import sentiment_all
+            sent = sentiment_all(list(tickers))
+            sentiment_scores = {
+                t: sent[t]["composite_score"]
+                for t in tickers
+                if t in sent and "error" not in sent[t]
+            }
+        except Exception:
+            pass
+
+    return {
+        t: weekly_forecast(
+            t,
+            sentiment_score=sentiment_scores.get(t),
+            live_price=live_prices.get(t, {}).get("price") if live_prices else None,
+        )
+        for t in tickers
+    }
+
+
 if __name__ == "__main__":
     results = forecast_all()
     for t, r in results.items():
