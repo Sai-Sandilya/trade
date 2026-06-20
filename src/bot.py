@@ -147,6 +147,9 @@ class LongTermDCABot:
         # ATR trailing stop — tracks highest close since last buy per ticker
         self._highest_close: dict[str, float] = {t: 0.0 for t in all_tickers}
 
+        # min_hold_days enforcement — tracks last buy date per ticker
+        self._last_buy_date: dict[str, Optional[pd.Timestamp]] = {t: None for t in all_tickers}
+
     # ── Data loading ──────────────────────────────────────────────────────────
 
     def _load(self, ticker: str, full: bool = False) -> pd.DataFrame:
@@ -305,6 +308,9 @@ class LongTermDCABot:
             return False
         if self.holdings[ticker] <= 0 or np.isnan(atr14) or atr14 <= 0:
             return False
+        last_buy = self._last_buy_date.get(ticker)
+        if last_buy is not None and (date - last_buy).days < self.cfg.min_hold_days:
+            return False
         if close > self._highest_close[ticker]:
             self._highest_close[ticker] = close
         trailing_stop = self._highest_close[ticker] - self.cfg.trailing_atr_multiple * atr14
@@ -351,8 +357,9 @@ class LongTermDCABot:
         if self.cfg.enable_trailing_stop and self.holdings.get(ticker, 0.0) == 0.0:
             self._highest_close[ticker] = 0.0
 
-        self.holdings[ticker]    = round(self.holdings[ticker] + shares, self.cfg.decimal_places)
-        self._cost_basis[ticker] = round(self._cost_basis[ticker] + budget, 4)
+        self.holdings[ticker]     = round(self.holdings[ticker] + shares, self.cfg.decimal_places)
+        self._cost_basis[ticker]  = round(self._cost_basis[ticker] + budget, 4)
+        self._last_buy_date[ticker] = date   # used by min_hold_days check in exits/rebalance
         fee = self.cfg.clearing_fee_usd + (shares * slippage_cost)
         self.total_fees += fee
 
@@ -444,6 +451,11 @@ class LongTermDCABot:
         if not self.cfg.enable_exits:
             return False
         if self.holdings[ticker] <= 0:
+            return False
+
+        # Enforce minimum hold period — never exit a position bought too recently
+        last_buy = self._last_buy_date.get(ticker)
+        if last_buy is not None and (date - last_buy).days < self.cfg.min_hold_days:
             return False
 
         avg_cost = self._avg_cost(ticker)
@@ -538,6 +550,10 @@ class LongTermDCABot:
 
         for ticker in self.cfg.tickers:
             if ticker not in prices:
+                continue
+            # Respect min_hold_days — never rebalance-sell a recently bought position
+            last_buy = self._last_buy_date.get(ticker)
+            if last_buy is not None and (date - last_buy).days < self.cfg.min_hold_days:
                 continue
             excess_value = values.get(ticker, 0) - target_values.get(ticker, 0)
             if excess_value > 1.0:  # overweight — sell excess
@@ -751,7 +767,13 @@ class LongTermDCABot:
             # ── Strategy 6: Execute rotation buys for defensive ticker ────────
             if skipped_for_rotation and self.cfg.enable_sector_rotation:
                 def_t = self.cfg.defensive_ticker
-                if def_t in all_data and def_t in prices:
+                # Skip rotation buys if defensive ticker was stopped or exited this month.
+                # Without this guard, we would buy XLU on the exact day it crashed.
+                if (
+                    def_t in all_data and def_t in prices
+                    and def_t not in trailing_stopped
+                    and def_t not in exited
+                ):
                     for skipped in skipped_for_rotation:
                         budget, _ = self._budget(
                             rsi_map.get(skipped, float("nan")),
