@@ -197,7 +197,8 @@ def comparison_metrics_table(results: dict[str, dict]) -> pd.DataFrame:
         eq.index = pd.to_datetime(eq.index, utc=True)
         total_eq = eq.get("total_portfolio_usd") if "total_portfolio_usd" in eq.columns else None
 
-        m = compute_all(total_eq) if total_eq is not None else {}
+        tlog = r.get("trade_log")
+        m    = compute_all(total_eq, trade_log=tlog) if total_eq is not None else {}
 
         summary          = r["summary"]
         total_invested   = float(summary["total_invested_usd"].sum())
