@@ -351,8 +351,11 @@ class LongTermDCABot:
             date.date(), max_drift * 100, self.cfg.rebalance_threshold_pct * 100,
         )
 
-        # Execute sells for overweight tickers first, then buys for underweight
+        # Execute sells for overweight tickers first, then buys for underweight.
+        # Capture net_proceeds from each sell into cash_pool so the cash is not lost.
+        # (LongTermDCABot has no cash balance — proceeds must be tracked explicitly here.)
         target_values = {t: total_value * targets.get(t, 0) for t in self.cfg.tickers}
+        cash_pool = 0.0
 
         for ticker in self.cfg.tickers:
             if ticker not in prices:
@@ -360,24 +363,24 @@ class LongTermDCABot:
             excess_value = values.get(ticker, 0) - target_values.get(ticker, 0)
             if excess_value > 1.0:  # overweight — sell excess
                 shares_to_sell = round(excess_value / prices[ticker], self.cfg.decimal_places)
-                self._execute_sell(
+                trade = self._execute_sell(
                     ticker, date, prices[ticker], shares_to_sell,
                     "REBALANCE_SELL", rsi_map.get(ticker, float("nan")),
                     sma_map.get(ticker, float("nan")),
                 )
+                # Accumulate actual cash received (after slippage + fees)
+                cash_pool += trade.get("proceeds_usd", 0.0)
 
-        # Recompute total after sells (proceeds stay as cash to redeploy)
-        total_after_sells = sum(
-            self.holdings[t] * prices[t] for t in self.cfg.tickers if t in prices
-        )
+        # True portfolio value = remaining shares + cash from sells
+        shares_value      = sum(self.holdings[t] * prices[t] for t in self.cfg.tickers if t in prices)
+        total_after_sells = shares_value + cash_pool
 
         for ticker in self.cfg.tickers:
             if ticker not in prices:
                 continue
-            current_value  = self.holdings[ticker] * prices[ticker]
-            # Use total_after_sells (actual post-fee cash) not pre-sell total_value
-            target_value   = total_after_sells * targets.get(ticker, 0)
-            deficit_value  = target_value - current_value
+            current_value = self.holdings[ticker] * prices[ticker]
+            target_value  = total_after_sells * targets.get(ticker, 0)
+            deficit_value = target_value - current_value
             if deficit_value > 1.0:  # underweight — buy to top up
                 self._execute_buy(
                     ticker, date, prices[ticker],
