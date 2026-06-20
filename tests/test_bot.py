@@ -155,11 +155,11 @@ class TestBudgetMultiplier:
         assert budget == 200.0
         assert trigger == "RSI_OVERSOLD_2X"
 
-    def test_rsi_oversold_takes_priority_over_below_sma(self):
-        # Both conditions true: RSI crash wins
+    def test_rsi_extreme_takes_priority_over_below_sma(self):
+        # RSI=20 is below extreme_oversold_rsi (25) → RSI_EXTREME_3X wins over SMA check
         budget, trigger = self.bot._budget(rsi=20.0, close=80.0, sma200=100.0)
-        assert trigger == "RSI_OVERSOLD_2X"
-        assert budget == 200.0
+        assert trigger == "RSI_EXTREME_3X"
+        assert budget == 300.0  # 100 * 3x extreme multiplier
 
     def test_rsi_nan_falls_back_to_sma_check(self):
         # NaN RSI should not crash; SMA check still applies
@@ -241,9 +241,9 @@ class TestExecuteBuy:
 
     def test_trigger_recorded_in_trade(self):
         date  = pd.Timestamp("2020-01-31", tz="UTC")
-        # RSI below threshold → RSI_OVERSOLD_2X
+        # RSI=20 is below extreme_oversold_rsi (25) → RSI_EXTREME_3X
         trade = self.bot._execute_buy("SPY", date, close=100.0, rsi=20.0, sma200=200.0)
-        assert trade["trigger"] == "RSI_OVERSOLD_2X"
+        assert trade["trigger"] == "RSI_EXTREME_3X"
 
 
 # ---------------------------------------------------------------------------
