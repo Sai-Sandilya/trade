@@ -42,7 +42,9 @@ _FIXED_HOLIDAYS: set[tuple[int, int]] = {
     (1, 1),   # New Year's Day
     (7, 4),   # Independence Day
     (12, 25), # Christmas Day
-    (12, 26), # Christmas observed (when 25th is Sunday)
+    # Dec 26 is NOT a fixed holiday — it is only closed when Dec 25 falls on
+    # Sunday (observed Monday). Hardcoding it would skip a normal trading day
+    # 6 out of every 7 years. Handled dynamically in _is_likely_trading_day().
 }
 
 
@@ -55,6 +57,11 @@ def _is_likely_trading_day(d: date) -> bool:
         return False
     if (d.month, d.day) in _FIXED_HOLIDAYS:
         return False
+    # Christmas observed: Dec 26 is a market holiday only when Dec 25 is Sunday
+    if d.month == 12 and d.day == 26:
+        from datetime import date as _date
+        if _date(d.year, 12, 25).weekday() == 6:  # 6 = Sunday
+            return False
     return True
 
 

@@ -121,7 +121,6 @@ def forecast_ticker(
     # without requiring a manual re-download. Historical indicators (RSI, SMA, etc.)
     # still use the full parquet history for accuracy.
     last_close = live_price if live_price is not None else float(close.iloc[-1])
-    prev_close = close.iloc[-2]
     last_date  = df.index[-1].date()
 
     # -- Compute indicators ----------------------------------------------------
@@ -131,8 +130,6 @@ def forecast_ticker(
     sma20        = close.rolling(20).mean().iloc[-1]
     sma50        = close.rolling(50).mean().iloc[-1]
     sma200       = close.rolling(200).mean().iloc[-1]
-    ema12        = _ema(close, 12).iloc[-1]
-    ema26        = _ema(close, 26).iloc[-1]
     macd_val, macd_sig, macd_hist = _macd(close)
     macd_v       = macd_val.iloc[-1]
     macd_s       = macd_sig.iloc[-1]
@@ -141,7 +138,6 @@ def forecast_ticker(
     bb_up, bb_mid, bb_low = _bollinger(close, 20)
     bb_upper     = bb_up.iloc[-1]
     bb_lower     = bb_low.iloc[-1]
-    bb_mid_v     = bb_mid.iloc[-1]
     atr_14       = _atr(high, low, close, 14).iloc[-1]
     stoch_k, stoch_d = _stochastic(high, low, close)
     sk           = stoch_k.iloc[-1]
