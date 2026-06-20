@@ -1468,6 +1468,12 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
 
     _run_comparison = st.button("Run Portfolio Comparison", key="run_comparison", type="primary")
 
+    # Cache-invalidation key: if sidebar settings changed since last run, discard cache.
+    _comp_cache_key = f"{start_date}|{end_date}|{'|'.join(sorted(active_tickers))}"
+    if st.session_state.get("comparison_cache_key") != _comp_cache_key:
+        st.session_state.pop("comparison_results", None)
+        st.session_state["comparison_cache_key"] = _comp_cache_key
+
     if _run_comparison or "comparison_results" in st.session_state:
         if _run_comparison:
             with st.spinner("Running 3 backtests (Conservative / Balanced / Aggressive)..."):
@@ -1479,6 +1485,11 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
                 st.session_state["comparison_results"] = _comp_results
 
         _comp_results = st.session_state["comparison_results"]
+
+        # Bug 5: show a warning for any preset that errored instead of silently hiding it
+        for _pname, _r in _comp_results.items():
+            if "error" in _r:
+                st.warning(f"**{_pname}** preset failed: {_r['error']}")
 
         _comp_eq = comparison_equity_table(_comp_results)
         if not _comp_eq.empty:
@@ -1493,7 +1504,7 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
                         line=dict(color=_preset.color, width=2),
                     ))
             _fig_comp.update_layout(
-                title="Equity Curves: Conservative vs Balanced vs Aggressive",
+                title="Equity Curves: Conservative vs Balanced vs Aggressive (same $100/mo budget)",
                 yaxis_title="Portfolio Value (USD)",
                 xaxis_title="Date",
                 hovermode="x unified",
