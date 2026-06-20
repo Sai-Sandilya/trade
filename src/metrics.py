@@ -11,6 +11,56 @@ import pandas as pd
 TRADING_DAYS_PER_YEAR = 252
 
 
+def _to_nav(equity: pd.Series, trade_log: pd.DataFrame) -> pd.Series:
+    """
+    Convert a raw equity curve to a unitized NAV series (starts at 1.0).
+
+    Problem: raw equity jumps on deposit days (monthly DCA buys), so
+    pct_change() sees a +50% "return" simply because $50 was deposited into
+    a $100 portfolio. This makes Sharpe, Sortino, volatility, CAGR, and
+    drawdown all wrong.
+
+    Fix (unitized NAV — same method used by mutual funds):
+      - Start with nav_price = 1.0, total_units = 0
+      - Each deposit issues new units at the CURRENT nav_price, so the
+        nav_price itself is unchanged by the deposit
+      - Between deposits, nav_price moves purely with market returns
+      - Result: nav.pct_change() is deposit-free daily return
+
+    If trade_log is None or empty, returns equity normalised to 1.0 (no-op).
+    """
+    if trade_log is None or trade_log.empty:
+        eq = equity[equity > 0]
+        return eq / eq.iloc[0] if not eq.empty else equity
+
+    # Build deposit lookup: date -> total budget invested that day
+    buys = trade_log[trade_log["budget_usd"] > 0].copy()
+    buys["_date"] = pd.to_datetime(buys["date"], utc=True)
+    deposits = buys.groupby("_date")["budget_usd"].sum()
+
+    nav_price   = 1.0
+    total_units = 0.0
+    nav_values: list[float] = []
+
+    for date, raw_value in equity.items():
+        deposit_today = float(deposits.get(date, 0.0))
+
+        # Value BEFORE today's deposit = raw equity minus today's fresh cash
+        value_before = raw_value - deposit_today
+
+        # Update nav_price from market movement (only when units exist)
+        if total_units > 0 and value_before > 0:
+            nav_price = value_before / total_units
+
+        # Issue new units for today's deposit at current nav_price
+        if deposit_today > 0 and nav_price > 0:
+            total_units += deposit_today / nav_price
+
+        nav_values.append(nav_price)
+
+    return pd.Series(nav_values, index=equity.index, dtype=float)
+
+
 def _daily_returns(equity: pd.Series) -> pd.Series:
     """Percentage daily returns, dropping leading zeros before first trade."""
     eq = equity[equity > 0]
@@ -119,22 +169,41 @@ def win_rate(equity: pd.Series) -> float:
 def compute_all(
     equity: pd.Series,
     risk_free_rate: float = 0.04,
+    trade_log: pd.DataFrame | None = None,
 ) -> dict:
     """
     Compute all metrics for one equity curve series.
-    equity: daily portfolio value (pd.Series with DatetimeIndex).
+
+    equity:          daily portfolio value (pd.Series with DatetimeIndex).
+    trade_log:       bot.run() output DataFrame — used to strip out deposit
+                     effects via unitized NAV conversion.  When None, raw
+                     equity is used (correct only for lump-sum portfolios).
+    risk_free_rate:  annual rate for Sharpe/Sortino (default 4%).
+
     Returns a dict of metric_name -> value.
+    All percentage metrics are stored as decimals (0.15 = 15%).
     """
+    # Convert to NAV series to remove deposit-day return distortions
+    nav = _to_nav(equity, trade_log)
+
+    # total_return: actual P&L vs cash invested (user-facing accounting)
+    if trade_log is not None and not trade_log.empty:
+        total_invested = float(trade_log[trade_log["budget_usd"] > 0]["budget_usd"].sum())
+        ending_value   = float(equity.iloc[-1]) if not equity.empty else 0.0
+        total_return   = (ending_value - total_invested) / total_invested if total_invested > 0 else 0.0
+    else:
+        total_return = float((equity.iloc[-1] / equity[equity > 0].iloc[0]) - 1) \
+                       if (equity > 0).any() else 0.0
+
     return {
-        "cagr":                 annualised_return(equity),
-        "annualised_vol":       annualised_volatility(equity),
-        "sharpe":               sharpe_ratio(equity, risk_free_rate),
-        "sortino":              sortino_ratio(equity, risk_free_rate),
-        "max_drawdown":         max_drawdown(equity),
-        "calmar":               calmar_ratio(equity),
-        "win_rate_monthly":     win_rate(equity),
-        "total_return":         float((equity.iloc[-1] / equity[equity > 0].iloc[0]) - 1)
-                                if (equity > 0).any() else 0.0,
+        "cagr":             annualised_return(nav),
+        "annualised_vol":   annualised_volatility(nav),
+        "sharpe":           sharpe_ratio(nav, risk_free_rate),
+        "sortino":          sortino_ratio(nav, risk_free_rate),
+        "max_drawdown":     max_drawdown(nav),
+        "calmar":           calmar_ratio(nav),
+        "win_rate_monthly": win_rate(nav),
+        "total_return":     total_return,
     }
 
 

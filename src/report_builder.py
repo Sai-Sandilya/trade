@@ -109,14 +109,14 @@ def build_excel_report(
     # -- Sheet 2: Risk Metrics -------------------------------------------------
     ws2 = wb.create_sheet("Risk Metrics")
     metric_rows = [
-        ("Total Return",        f"{metrics.get('total_return_pct', float('nan')):.2f}%"),
-        ("CAGR",                f"{metrics.get('cagr_pct', float('nan')):.2f}%"),
-        ("Sharpe Ratio",        f"{metrics.get('sharpe_ratio', float('nan')):.3f}"),
-        ("Sortino Ratio",       f"{metrics.get('sortino_ratio', float('nan')):.3f}"),
-        ("Max Drawdown",        f"{metrics.get('max_drawdown_pct', float('nan')):.2f}%"),
-        ("Calmar Ratio",        f"{metrics.get('calmar_ratio', float('nan')):.3f}"),
-        ("Annualised Volatility", f"{metrics.get('annualised_volatility_pct', float('nan')):.2f}%"),
-        ("Monthly Win Rate",    f"{metrics.get('win_rate_pct', float('nan')):.1f}%"),
+        ("Total Return",          f"{metrics.get('total_return',     float('nan')) * 100:.2f}%"),
+        ("CAGR",                  f"{metrics.get('cagr',             float('nan')) * 100:.2f}%"),
+        ("Sharpe Ratio",          f"{metrics.get('sharpe',           float('nan')):.3f}"),
+        ("Sortino Ratio",         f"{metrics.get('sortino',          float('nan')):.3f}"),
+        ("Max Drawdown",          f"{metrics.get('max_drawdown',     float('nan')) * 100:.2f}%"),
+        ("Calmar Ratio",          f"{metrics.get('calmar',           float('nan')):.3f}"),
+        ("Annualised Volatility", f"{metrics.get('annualised_vol',   float('nan')) * 100:.2f}%"),
+        ("Monthly Win Rate",      f"{metrics.get('win_rate_monthly', float('nan')) * 100:.1f}%"),
     ]
     _write_df(ws2, pd.DataFrame(metric_rows, columns=["Metric", "Value"]),
               start_row=1, title="Risk & Performance Metrics")
@@ -268,14 +268,14 @@ def build_pdf_report(
     pdf.cell(0, 8, "Risk & Performance Metrics", new_x="LMARGIN", new_y="NEXT")
 
     metric_pairs = [
-        ("Total Return",        f"{metrics.get('total_return_pct', float('nan')):.2f}%"),
-        ("CAGR",                f"{metrics.get('cagr_pct', float('nan')):.2f}%"),
-        ("Sharpe Ratio",        f"{metrics.get('sharpe_ratio', float('nan')):.3f}"),
-        ("Sortino Ratio",       f"{metrics.get('sortino_ratio', float('nan')):.3f}"),
-        ("Max Drawdown",        f"{metrics.get('max_drawdown_pct', float('nan')):.2f}%"),
-        ("Calmar Ratio",        f"{metrics.get('calmar_ratio', float('nan')):.3f}"),
-        ("Ann. Volatility",     f"{metrics.get('annualised_volatility_pct', float('nan')):.2f}%"),
-        ("Monthly Win Rate",    f"{metrics.get('win_rate_pct', float('nan')):.1f}%"),
+        ("Total Return",    f"{metrics.get('total_return',     float('nan')) * 100:.2f}%"),
+        ("CAGR",            f"{metrics.get('cagr',             float('nan')) * 100:.2f}%"),
+        ("Sharpe Ratio",    f"{metrics.get('sharpe',           float('nan')):.3f}"),
+        ("Sortino Ratio",   f"{metrics.get('sortino',          float('nan')):.3f}"),
+        ("Max Drawdown",    f"{metrics.get('max_drawdown',     float('nan')) * 100:.2f}%"),
+        ("Calmar Ratio",    f"{metrics.get('calmar',           float('nan')):.3f}"),
+        ("Ann. Volatility", f"{metrics.get('annualised_vol',   float('nan')) * 100:.2f}%"),
+        ("Monthly Win Rate",f"{metrics.get('win_rate_monthly', float('nan')) * 100:.1f}%"),
     ]
 
     pdf.set_font("Helvetica", "", 10)

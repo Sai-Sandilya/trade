@@ -468,7 +468,7 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
     total_eq = equity["total_portfolio_usd"] if "total_portfolio_usd" in equity.columns else None
     if total_eq is not None:
         total_eq.index = pd.to_datetime(total_eq.index, utc=True)
-        raw_metrics    = compute_all(total_eq, risk_free_rate=0.04)
+        raw_metrics    = compute_all(total_eq, risk_free_rate=0.04, trade_log=trade_log)
         pretty_metrics = format_metrics(raw_metrics)
 
         rm1, rm2, rm3, rm4 = st.columns(4)
