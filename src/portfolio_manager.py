@@ -136,7 +136,11 @@ def run_comparison(
     """
     from bot import LongTermDCABot, BotConfig
     from pipeline import clean_all
+    from ingestion import ingest_all
 
+    # Download raw data first — comparison can be triggered independently
+    # of the main backtest button, so we can't assume data already exists.
+    ingest_all(tickers)
     clean_all(tickers)
     results = {}
 
