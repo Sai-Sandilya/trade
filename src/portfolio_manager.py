@@ -138,10 +138,16 @@ def run_comparison(
     from pipeline import clean_all
     from ingestion import ingest_all
 
-    # Download raw data first — comparison can be triggered independently
-    # of the main backtest button, so we can't assume data already exists.
-    ingest_all(tickers)
-    clean_all(tickers)
+    # Sector rotation presets need XLU which isn't in the user's ticker list.
+    # Collect all extra tickers required by any preset before downloading.
+    all_tickers = list(tickers)
+    for name in preset_names:
+        p = PRESETS.get(name)
+        if p and p.enable_sector_rotation and "XLU" not in all_tickers:
+            all_tickers.append("XLU")
+
+    ingest_all(all_tickers)
+    clean_all(all_tickers)
     results = {}
 
     for name in preset_names:
