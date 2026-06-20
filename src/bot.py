@@ -79,9 +79,40 @@ class BotConfig:
 
     # ── Rebalancing settings (disabled by default) ────────────────────────────
     enable_rebalance: bool = False
-    rebalance_threshold_pct: float = 0.10   # rebalance when any ticker drifts >10%
-    rebalance_frequency_months: int = 3      # check every 3 months (quarterly)
-    target_weights: Optional[dict] = None    # None = equal weight across all tickers
+    rebalance_threshold_pct: float = 0.10
+    rebalance_frequency_months: int = 3
+    target_weights: Optional[dict] = None
+
+    # ── 1. Regime detection ────────────────────────────────────────────────────
+    enable_regime_filter: bool = False
+    regime_ticker: str = "SPY"
+
+    # ── 2. RSI extreme tiers ───────────────────────────────────────────────────
+    extreme_oversold_rsi: float = 25.0
+    extreme_oversold_multiplier: float = 3.0
+    crash_rsi: float = 15.0
+    crash_multiplier: float = 5.0
+
+    # ── 3. Earnings calendar ───────────────────────────────────────────────────
+    enable_earnings_filter: bool = False
+    earnings_tickers: list = field(default_factory=lambda: ["AMD"])
+    earnings_pre_days: int = 14
+    earnings_pre_multiplier: float = 0.5
+    earnings_beat_multiplier: float = 2.0
+
+    # ── 4. Kelly position sizing ───────────────────────────────────────────────
+    enable_kelly_sizing: bool = False
+    kelly_lookback_months: int = 24
+
+    # ── 5. ATR trailing stop ───────────────────────────────────────────────────
+    enable_trailing_stop: bool = False
+    trailing_atr_multiple: float = 2.5
+
+    # ── 6. Sector rotation ─────────────────────────────────────────────────────
+    # During bear regime redirect normal DCA budgets to defensive_ticker.
+    # defensive_ticker data must be present in data/cleaned/.
+    enable_sector_rotation: bool = False
+    defensive_ticker: str = "XLU"
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────
@@ -101,6 +132,9 @@ class LongTermDCABot:
         # Last rebalance date — avoids rebalancing every month
         self._last_rebalance: Optional[pd.Timestamp] = None
 
+        # ATR trailing stop — tracks highest close since last buy per ticker
+        self._highest_close: dict[str, float] = {t: 0.0 for t in config.tickers}
+
     # ── Data loading ──────────────────────────────────────────────────────────
 
     def _load(self, ticker: str, full: bool = False) -> pd.DataFrame:
@@ -113,12 +147,26 @@ class LongTermDCABot:
         path = CLEAN_DIR / f"{ticker}_clean.parquet"
         if not path.exists():
             raise FileNotFoundError(f"Cleaned file not found: {path}")
-        df = pd.read_parquet(path, engine="pyarrow")[["Close", "Volume"]]
+        raw  = pd.read_parquet(path, engine="pyarrow")
+        cols = ["Close", "Volume"] + [c for c in ("High", "Low") if c in raw.columns]
+        df   = raw[cols].copy()
         df.index = pd.to_datetime(df.index, utc=True)
         df = df.sort_index()
 
-        df["RSI"]   = _rsi(df["Close"], self.cfg.rsi_period)
+        df["RSI"]    = _rsi(df["Close"], self.cfg.rsi_period)
         df["SMA200"] = _sma(df["Close"], self.cfg.sma_period)
+
+        # ATR14 — required by trailing stop strategy
+        if "High" in df.columns and "Low" in df.columns:
+            prev_close = df["Close"].shift(1)
+            tr = pd.concat([
+                df["High"] - df["Low"],
+                (df["High"] - prev_close).abs(),
+                (df["Low"]  - prev_close).abs(),
+            ], axis=1).max(axis=1)
+            df["ATR14"] = tr.rolling(14, min_periods=14).mean()
+        else:
+            df["ATR14"] = float("nan")
 
         if not full:
             if self.cfg.start_date:
@@ -134,6 +182,11 @@ class LongTermDCABot:
         rsi_valid = not np.isnan(rsi)
         sma_valid = not np.isnan(sma200)
 
+        # RSI extreme tiers — checked in ascending order of severity
+        if rsi_valid and rsi < self.cfg.crash_rsi:
+            return self.cfg.monthly_budget_usd * self.cfg.crash_multiplier, "RSI_CRASH_5X"
+        if rsi_valid and rsi < self.cfg.extreme_oversold_rsi:
+            return self.cfg.monthly_budget_usd * self.cfg.extreme_oversold_multiplier, "RSI_EXTREME_3X"
         if rsi_valid and rsi < self.cfg.oversold_rsi:
             return self.cfg.monthly_budget_usd * self.cfg.oversold_multiplier, "RSI_OVERSOLD_2X"
         if sma_valid and close < sma200:
@@ -147,6 +200,113 @@ class LongTermDCABot:
         if shares <= 0:
             return 0.0
         return self._cost_basis[ticker] / shares
+
+    # ── Strategy 4: Kelly position sizing ─────────────────────────────────────
+
+    def _kelly_multiplier(self, df: pd.DataFrame, date: pd.Timestamp) -> float:
+        """Half-Kelly budget multiplier from prior kelly_lookback_months of monthly returns."""
+        if not self.cfg.enable_kelly_sizing:
+            return 1.0
+        start = date - pd.DateOffset(months=self.cfg.kelly_lookback_months)
+        hist  = df.loc[(df.index >= start) & (df.index < date), "Close"]
+        if len(hist) < 50:
+            return 1.0
+        monthly = hist.resample("ME").last().pct_change().dropna()
+        if len(monthly) < 6:
+            return 1.0
+        wins   = monthly[monthly > 0]
+        losses = monthly[monthly < 0]
+        if wins.empty or losses.empty:
+            return 1.0
+        win_rate  = len(wins) / len(monthly)
+        avg_win   = float(wins.mean())
+        avg_loss  = float(abs(losses.mean()))
+        if avg_win <= 0:
+            return 1.0
+        kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+        return float(max(0.5, min(2.0, 1.0 + kelly_f / 2.0)))
+
+    # ── Strategy 3: Earnings calendar ─────────────────────────────────────────
+
+    def _fetch_earnings_dates(self) -> dict[str, object]:
+        """Fetch historical earnings dates + EPS actuals for earnings_tickers."""
+        result: dict[str, object] = {}
+        if not self.cfg.enable_earnings_filter:
+            return result
+        try:
+            import yfinance as yf
+        except ImportError:
+            logger.warning("yfinance not installed — earnings filter disabled")
+            return result
+        for ticker in self.cfg.earnings_tickers:
+            try:
+                ed = yf.Ticker(ticker).earnings_dates
+                if ed is not None and not ed.empty:
+                    ed = ed.copy()
+                    ed.index = pd.to_datetime(ed.index, utc=True)
+                    result[ticker] = ed
+            except Exception as exc:
+                logger.warning("Could not fetch earnings for %s: %s", ticker, exc)
+        return result
+
+    def _earnings_budget_scale(
+        self,
+        ticker: str,
+        date: pd.Timestamp,
+        earnings_map: dict,
+    ) -> tuple[float, str]:
+        """Return (scale, trigger_suffix) based on proximity to earnings date."""
+        if not self.cfg.enable_earnings_filter or ticker not in earnings_map:
+            return 1.0, ""
+        ed          = earnings_map[ticker]
+        pre_window  = pd.Timedelta(days=self.cfg.earnings_pre_days)
+        post_window = pd.Timedelta(days=30)
+        for earn_date, row in ed.iterrows():
+            if earn_date.tzinfo is None:
+                earn_date = earn_date.tz_localize("UTC")
+            if (earn_date - pre_window) <= date < earn_date:
+                return self.cfg.earnings_pre_multiplier, "EARNINGS_PRE_REDUCE"
+            if earn_date <= date <= (earn_date + post_window):
+                try:
+                    reported = float(row.get("Reported EPS", float("nan")))
+                    estimate = float(row.get("EPS Estimate",  float("nan")))
+                    if not (np.isnan(reported) or np.isnan(estimate)) and reported > estimate:
+                        return self.cfg.earnings_beat_multiplier, "EARNINGS_BEAT_BUY"
+                except (TypeError, ValueError):
+                    pass
+                return 1.0, ""
+        return 1.0, ""
+
+    # ── Strategy 5: ATR trailing stop ─────────────────────────────────────────
+
+    def _check_trailing_stop(
+        self,
+        ticker: str,
+        date: pd.Timestamp,
+        close: float,
+        rsi: float,
+        sma200: float,
+        atr14: float,
+    ) -> bool:
+        """ATR-based trailing stop. Returns True if position was closed."""
+        if not self.cfg.enable_trailing_stop:
+            return False
+        if self.holdings[ticker] <= 0 or np.isnan(atr14) or atr14 <= 0:
+            return False
+        if close > self._highest_close[ticker]:
+            self._highest_close[ticker] = close
+        trailing_stop = self._highest_close[ticker] - self.cfg.trailing_atr_multiple * atr14
+        if close < trailing_stop:
+            logger.info(
+                "[%s] TRAILING_STOP on %s: $%.2f < stop $%.2f (peak $%.2f − %.1f×ATR $%.2f)",
+                date.date(), ticker, close, trailing_stop,
+                self._highest_close[ticker], self.cfg.trailing_atr_multiple, atr14,
+            )
+            self._execute_sell(ticker, date, close, self.holdings[ticker],
+                               "TRAILING_STOP", rsi, sma200)
+            self._highest_close[ticker] = 0.0
+            return True
+        return False
 
     # ── Trade execution — BUY ─────────────────────────────────────────────────
 
@@ -430,31 +590,73 @@ class LongTermDCABot:
         for ticker in self.cfg.tickers:
             all_data[ticker] = self._load(ticker)
 
+        # Strategy 1 & 6 — load regime ticker if not already in all_data
+        regime_data: Optional[pd.DataFrame] = None
+        need_regime = self.cfg.enable_regime_filter or self.cfg.enable_sector_rotation
+        if need_regime:
+            if self.cfg.regime_ticker in all_data:
+                regime_data = all_data[self.cfg.regime_ticker]
+            else:
+                regime_path = CLEAN_DIR / f"{self.cfg.regime_ticker}_clean.parquet"
+                if regime_path.exists():
+                    regime_data = self._load(self.cfg.regime_ticker)
+                else:
+                    logger.warning(
+                        "Regime ticker %s not in cleaned data — regime filter disabled",
+                        self.cfg.regime_ticker,
+                    )
+
+        # Strategy 3 — fetch earnings dates once before the loop (one network call)
+        earnings_map = self._fetch_earnings_dates()
+
         # Build union of all last-trading-days across all tickers, sorted
         monthly_dates: set[pd.Timestamp] = set()
         for ticker, df in all_data.items():
-            months = df.index.tz_localize(None).to_period("M").to_series(index=df.index)
+            months  = df.index.tz_localize(None).to_period("M").to_series(index=df.index)
             is_last = months != months.shift(-1)
             for ts in df[is_last].index:
                 monthly_dates.add(ts)
 
         for date in sorted(monthly_dates):
-            # Gather prices, RSI, SMA200 for all tickers on this date
+            # ── Regime detection (Strategies 1 & 6) ──────────────────────────
+            bear_regime = False
+            if need_regime and regime_data is not None:
+                regime_row = regime_data[regime_data.index <= date]
+                if not regime_row.empty:
+                    r = regime_row.iloc[-1]
+                    bear_regime = (not np.isnan(r["SMA200"])) and (r["Close"] < r["SMA200"])
+
+            # ── Gather prices, RSI, SMA200, ATR14 ────────────────────────────
             prices  = {}
             rsi_map = {}
             sma_map = {}
+            atr_map = {}
             for ticker, df in all_data.items():
                 if date in df.index:
                     row = df.loc[date]
-                    prices[ticker]  = row["Close"]
-                    rsi_map[ticker] = row["RSI"]
-                    sma_map[ticker] = row["SMA200"]
+                    prices[ticker]  = float(row["Close"])
+                    rsi_map[ticker] = float(row["RSI"])
+                    sma_map[ticker] = float(row["SMA200"])
+                    atr_map[ticker] = float(row["ATR14"]) if "ATR14" in df.columns else float("nan")
 
-            # 1. Check exits before buying — don't buy into a position we just closed
+            # ── 1. ATR Trailing Stop (before other exits) ─────────────────────
+            trailing_stopped: set[str] = set()
+            for ticker in self.cfg.tickers:
+                if ticker in prices:
+                    stopped = self._check_trailing_stop(
+                        ticker, date, prices[ticker],
+                        rsi_map.get(ticker, float("nan")),
+                        sma_map.get(ticker, float("nan")),
+                        atr_map.get(ticker, float("nan")),
+                    )
+                    if stopped:
+                        trailing_stopped.add(ticker)
+
+            # ── 2. Take-profit / stop-loss exits ─────────────────────────────
             exited: set[str] = set()
             if self.cfg.enable_exits:
                 for ticker in self.cfg.tickers:
-                    if ticker in prices:
+                    if ticker in prices and ticker not in trailing_stopped:
                         sold = self._check_exits(
                             ticker, date, prices[ticker],
                             rsi_map.get(ticker, float("nan")),
@@ -463,22 +665,83 @@ class LongTermDCABot:
                         if sold:
                             exited.add(ticker)
 
-            # 2. Check rebalancing (quarterly, cross-ticker)
+            # ── 3. Quarterly rebalancing ──────────────────────────────────────
             self._check_rebalance(date, prices, rsi_map, sma_map)
 
-            # 3. Monthly DCA buy for each ticker that has data on this date
+            # ── 4. Monthly DCA buys ───────────────────────────────────────────
+            skipped_for_rotation: list[str] = []
+
             for ticker in self.cfg.tickers:
                 if ticker not in prices:
                     continue
-                if ticker in exited:
-                    continue   # skip buy this month for tickers just exited
+                if ticker in trailing_stopped or ticker in exited:
+                    continue
+
+                # ── Strategy 6: Sector rotation in bear regime ────────────────
+                if bear_regime and self.cfg.enable_sector_rotation:
+                    def_t = self.cfg.defensive_ticker
+                    if def_t in all_data and def_t in prices and def_t != ticker:
+                        skipped_for_rotation.append(ticker)
+                        continue
+                    # defensive_ticker itself — fall through to normal buy below
+
+                # ── Strategy 1: Regime filter — skip buys in bear market ──────
+                if bear_regime and self.cfg.enable_regime_filter and not self.cfg.enable_sector_rotation:
+                    continue
+
+                # ── Compute base budget + trigger ─────────────────────────────
+                budget, trigger = self._budget(
+                    rsi_map.get(ticker, float("nan")),
+                    prices[ticker],
+                    sma_map.get(ticker, float("nan")),
+                )
+
+                # ── Strategy 4: Kelly sizing multiplier ───────────────────────
+                kelly = self._kelly_multiplier(all_data[ticker], date)
+
+                # ── Strategy 3: Earnings calendar scale ───────────────────────
+                earn_scale, earn_suffix = self._earnings_budget_scale(ticker, date, earnings_map)
+                if earn_suffix:
+                    trigger = earn_suffix
+
+                final_budget = round(budget * kelly * earn_scale, 4)
+
                 self._execute_buy(
                     ticker=ticker,
                     date=date,
                     close=prices[ticker],
                     rsi=rsi_map.get(ticker, float("nan")),
                     sma200=sma_map.get(ticker, float("nan")),
+                    forced_budget=final_budget,
+                    trigger_override=trigger,
                 )
+
+                # Update trailing stop peak after buy
+                if self.cfg.enable_trailing_stop:
+                    self._highest_close[ticker] = max(
+                        self._highest_close.get(ticker, 0.0), prices[ticker]
+                    )
+
+            # ── Strategy 6: Execute rotation buys for defensive ticker ────────
+            if skipped_for_rotation and self.cfg.enable_sector_rotation:
+                def_t = self.cfg.defensive_ticker
+                if def_t in all_data and def_t in prices:
+                    for skipped in skipped_for_rotation:
+                        budget, _ = self._budget(
+                            rsi_map.get(skipped, float("nan")),
+                            prices[skipped],
+                            sma_map.get(skipped, float("nan")),
+                        )
+                        kelly = self._kelly_multiplier(all_data[def_t], date)
+                        self._execute_buy(
+                            ticker=def_t,
+                            date=date,
+                            close=prices[def_t],
+                            rsi=rsi_map.get(def_t, float("nan")),
+                            sma200=sma_map.get(def_t, float("nan")),
+                            forced_budget=round(budget * kelly, 4),
+                            trigger_override="ROTATION_BUY",
+                        )
 
         logger.info(
             "Backtest complete. Trades: %d | Total fees: $%.4f",
@@ -501,9 +764,13 @@ class LongTermDCABot:
 
             t = trade_log[trade_log["ticker"] == ticker]
 
-            total_invested  = t.loc[t["action"].isin(["BUY", "RSI_OVERSOLD_2X",
-                                                       "BELOW_SMA200_1.5X", "DCA_NORMAL",
-                                                       "REBALANCE_BUY"]), "budget_usd"].sum()
+            total_invested  = t.loc[t["action"].isin([
+                                "BUY", "DCA_NORMAL",
+                                "RSI_OVERSOLD_2X", "RSI_EXTREME_3X", "RSI_CRASH_5X",
+                                "BELOW_SMA200_1.5X",
+                                "REBALANCE_BUY", "ROTATION_BUY",
+                                "EARNINGS_BEAT_BUY", "EARNINGS_PRE_REDUCE",
+                            ]), "budget_usd"].sum()
             total_proceeds  = t.loc[t["proceeds_usd"].notna(), "proceeds_usd"].sum()
             net_invested    = round(total_invested - total_proceeds, 4)
             realized_pnl    = round(self._realized_pnl.get(ticker, 0.0), 4)
