@@ -120,20 +120,32 @@ class BotConfig:
 class LongTermDCABot:
     def __init__(self, config: BotConfig = BotConfig()):
         self.cfg = config
+
+        # Sector rotation: defensive_ticker must be in tickers so that holdings,
+        # cost_basis, and all_data are all initialized for it. Without this,
+        # _execute_buy raises KeyError and capital silently disappears.
+        if (
+            config.enable_sector_rotation
+            and config.defensive_ticker not in config.tickers
+        ):
+            config.tickers = list(config.tickers) + [config.defensive_ticker]
+
+        all_tickers = config.tickers
+
         self.trades: list[dict] = []
-        self.holdings: dict[str, float] = {t: 0.0 for t in config.tickers}
+        self.holdings: dict[str, float] = {t: 0.0 for t in all_tickers}
         self.total_fees: float = 0.0
 
         # Cost basis tracking (total dollars invested, excluding fees, per ticker)
         # Used to compute avg cost and realized P&L on sells
-        self._cost_basis: dict[str, float] = {t: 0.0 for t in config.tickers}
-        self._realized_pnl: dict[str, float] = {t: 0.0 for t in config.tickers}
+        self._cost_basis: dict[str, float] = {t: 0.0 for t in all_tickers}
+        self._realized_pnl: dict[str, float] = {t: 0.0 for t in all_tickers}
 
         # Last rebalance date — avoids rebalancing every month
         self._last_rebalance: Optional[pd.Timestamp] = None
 
         # ATR trailing stop — tracks highest close since last buy per ticker
-        self._highest_close: dict[str, float] = {t: 0.0 for t in config.tickers}
+        self._highest_close: dict[str, float] = {t: 0.0 for t in all_tickers}
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
@@ -331,6 +343,13 @@ class LongTermDCABot:
         fill_price    = round(close + slippage_cost, 4)
         net_budget    = budget - self.cfg.clearing_fee_usd
         shares        = round(max(net_budget, 0) / fill_price, self.cfg.decimal_places)
+
+        # Opening a fresh position — clear any ghost peak from a prior position.
+        # Without this, a trailing stop from a previous trade cycle would fire
+        # immediately on the new position because _highest_close was never reset
+        # by take-profit, stop-loss, or rebalance sells.
+        if self.cfg.enable_trailing_stop and self.holdings.get(ticker, 0.0) == 0.0:
+            self._highest_close[ticker] = 0.0
 
         self.holdings[ticker]    = round(self.holdings[ticker] + shares, self.cfg.decimal_places)
         self._cost_basis[ticker] = round(self._cost_basis[ticker] + budget, 4)
@@ -585,10 +604,17 @@ class LongTermDCABot:
             self.cfg.enable_exits, self.cfg.enable_rebalance,
         )
 
-        # Load all ticker data upfront
+        # Load all ticker data upfront.
+        # Skip tickers whose parquet file doesn't exist yet (e.g. defensive_ticker
+        # when sector rotation is enabled but XLU hasn't been downloaded).
         all_data: dict[str, pd.DataFrame] = {}
         for ticker in self.cfg.tickers:
-            all_data[ticker] = self._load(ticker)
+            try:
+                all_data[ticker] = self._load(ticker)
+            except FileNotFoundError:
+                logger.warning(
+                    "No cleaned data for %s — ticker will be skipped in backtest", ticker
+                )
 
         # Strategy 1 & 6 — load regime ticker if not already in all_data
         regime_data: Optional[pd.DataFrame] = None
