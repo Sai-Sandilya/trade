@@ -795,7 +795,15 @@ class LongTermDCABot:
             "Backtest complete. Trades: %d | Total fees: $%.4f",
             len(self.trades), self.total_fees,
         )
-        return pd.DataFrame(self.trades)
+        if self.trades:
+            return pd.DataFrame(self.trades)
+        # Return an empty DataFrame with the correct schema so summary() and
+        # equity_curve() can safely do trade_log["ticker"] without KeyError.
+        return pd.DataFrame(columns=[
+            "date", "ticker", "action", "trigger", "budget_usd",
+            "fill_price", "shares_transacted", "cumulative_shares",
+            "rsi", "sma200", "fee_usd", "proceeds_usd", "realized_pnl_usd",
+        ])
 
     # ── Summary ───────────────────────────────────────────────────────────────
 
