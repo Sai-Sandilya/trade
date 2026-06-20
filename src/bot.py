@@ -211,11 +211,12 @@ class LongTermDCABot:
         if shares_to_sell <= 0:
             return {}
 
-        # Slippage on sells: price drops by slippage (selling at a slightly worse price)
+        # Slippage on sells: fill_price is already worse than close by slippage.
+        # Fee is clearing_fee only — slippage is already embedded in fill_price.
         slippage_cost = close * (self.cfg.slippage_bps / 10_000)
         fill_price    = round(close - slippage_cost, 4)
         proceeds      = round(shares_to_sell * fill_price, 4)
-        fee           = self.cfg.clearing_fee_usd + (shares_to_sell * slippage_cost)
+        fee           = self.cfg.clearing_fee_usd
         net_proceeds  = round(proceeds - fee, 4)
 
         # Realized P&L: proportional cost basis of shares sold
@@ -374,7 +375,8 @@ class LongTermDCABot:
             if ticker not in prices:
                 continue
             current_value  = self.holdings[ticker] * prices[ticker]
-            target_value   = total_value * targets.get(ticker, 0)
+            # Use total_after_sells (actual post-fee cash) not pre-sell total_value
+            target_value   = total_after_sells * targets.get(ticker, 0)
             deficit_value  = target_value - current_value
             if deficit_value > 1.0:  # underweight — buy to top up
                 self._execute_buy(

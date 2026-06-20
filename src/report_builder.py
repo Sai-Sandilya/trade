@@ -197,12 +197,12 @@ def build_pdf_report(
     # -- Title -----------------------------------------------------------------
     pdf.set_font("Helvetica", "B", 18)
     pdf.set_text_color(30, 58, 95)
-    pdf.cell(0, 12, "DCA Portfolio Backtest Report", ln=True, align="C")
+    pdf.cell(0, 12, "DCA Portfolio Backtest Report", new_x="LMARGIN", new_y="NEXT", align="C")
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(100, 100, 100)
     run_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    pdf.cell(0, 6, f"{cfg_label}  |  Generated {run_time}", ln=True, align="C")
+    pdf.cell(0, 6, f"{cfg_label}  |  Generated {run_time}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(4)
 
     # -- Divider ---------------------------------------------------------------
@@ -214,7 +214,7 @@ def build_pdf_report(
     # -- Portfolio Summary table -----------------------------------------------
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(30, 58, 95)
-    pdf.cell(0, 8, "Portfolio Summary", ln=True)
+    pdf.cell(0, 8, "Portfolio Summary", new_x="LMARGIN", new_y="NEXT")
 
     headers = ["Ticker", "Invested", "Market Value", "Unrealised P&L", "P&L %", "Trades"]
     col_w   = [25, 35, 35, 35, 25, 20]
@@ -265,7 +265,7 @@ def build_pdf_report(
     # -- Risk Metrics ----------------------------------------------------------
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(30, 58, 95)
-    pdf.cell(0, 8, "Risk & Performance Metrics", ln=True)
+    pdf.cell(0, 8, "Risk & Performance Metrics", new_x="LMARGIN", new_y="NEXT")
 
     metric_pairs = [
         ("Total Return",        f"{metrics.get('total_return_pct', float('nan')):.2f}%"),
