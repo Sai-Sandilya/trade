@@ -133,8 +133,17 @@ def load_aligned(tickers: list[str]) -> pd.DataFrame:
     aligned = pd.concat(frames.values(), axis=1, join="outer")
     aligned = aligned.sort_index()
 
-    # Fill gaps created by outer-join (e.g., one asset has a date another doesn't)
-    aligned = aligned.ffill().bfill()
+    # Fill gaps created by outer-join.
+    # Price columns: ffill (asset value unchanged on non-trading days), then bfill
+    # for any leading NaNs at the start of the series.
+    # Volume columns: fill with 0 — an asset that didn't trade has zero volume,
+    # not yesterday's volume. Forwarding volume inflates OBV and other indicators.
+    price_cols = [c for c in aligned.columns if c[1] == "Close"]
+    vol_cols   = [c for c in aligned.columns if c[1] == "Volume"]
+    if price_cols:
+        aligned[price_cols] = aligned[price_cols].ffill().bfill()
+    if vol_cols:
+        aligned[vol_cols] = aligned[vol_cols].fillna(0)
 
     logger.info("Aligned multi-asset frame: %d rows × %d cols", *aligned.shape)
     return aligned
