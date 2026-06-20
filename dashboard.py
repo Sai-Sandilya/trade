@@ -1304,7 +1304,8 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
     try:
         from performance_tracker import save_snapshot
         if raw_metrics:
-            save_snapshot(summary, raw_metrics, equity, cfg_label="Balanced")
+            _cfg_label = f"${monthly_budget}/mo RSI{oversold_rsi} SMA{below_sma_mult}x"
+            save_snapshot(summary, raw_metrics, equity, cfg_label=_cfg_label)
     except Exception:
         pass
 
@@ -1432,13 +1433,19 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
             _monthly_disp["end_value"]   = _monthly_disp["end_value"].map("${:,.2f}".format)
 
             def _colour_month(val):
-                if isinstance(val, str) and val.startswith("$+"):
+                if not isinstance(val, str):
+                    return ""
+                # change_usd formatted as "$+1,234.56" / "$-1,234.56"
+                # change_pct formatted as "+5.39%"    / "-2.80%"
+                if val.startswith("$+") or val.startswith("+"):
                     return "color: #4CAF50; font-weight:600"
-                if isinstance(val, str) and val.startswith("$-"):
+                if val.startswith("$-") or val.startswith("-"):
                     return "color: #F44336; font-weight:600"
                 return ""
 
-            _styled_monthly = _monthly_disp.style.map(_colour_month, subset=["change_usd"])
+            _styled_monthly = _monthly_disp.style.map(
+                _colour_month, subset=["change_usd", "change_pct"]
+            )
             st.dataframe(_styled_monthly, width='stretch', hide_index=True, height=350)
 
     st.divider()
