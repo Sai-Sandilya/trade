@@ -5,6 +5,7 @@ Run with:
     .venv\Scripts\streamlit run dashboard.py
 """
 
+import datetime
 import sys
 from pathlib import Path
 
@@ -228,7 +229,7 @@ start_date = st.sidebar.date_input(
     help="Leave blank to use each ticker's earliest available date"
 )
 end_date = st.sidebar.date_input(
-    "End date", value=pd.Timestamp("2024-12-31").date(),
+    "End date", value=datetime.date.today(),
     help="Last date to include in the backtest"
 )
 
