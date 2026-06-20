@@ -268,23 +268,58 @@ def forecast_ticker(
     confidence_pct = round((n_agree / len(signals)) * 100)
 
     # -- Expected range for NEXT trading session -------------------------------
-    # Built from ATR (volatility measure) around last close.
-    # NOT a prediction — a volatility-based range.
-    # Historical intraday range is typically 0.8–1.2x ATR for a single session.
 
-    atr_factor = 1.0
-    expected_low  = round(last_close - atr_factor * atr_14, 2)
-    expected_high = round(last_close + atr_factor * atr_14, 2)
+    # 1. Signal confidence scaling
+    #    When more signals agree, we are more certain of direction → shrink range.
+    #    agreement_ratio = fraction of non-neutral signals that agree with the bias.
+    #    Range: 0.0 (all neutral) to 1.0 (all signals agree).
+    #    atr_factor shrinks from 1.0 down to 0.6 as confidence rises.
+    non_neutral = bull_count + bear_count
+    if non_neutral > 0:
+        agreement_ratio = n_agree / non_neutral
+    else:
+        agreement_ratio = 0.0
+    confidence_scale = 1.0 - (agreement_ratio * 0.4)   # 1.0 → 0.6
 
-    # Bias-adjusted midpoint (slight skew toward signal direction)
-    skew = (total_score / len(signals)) * atr_14 * 0.5
-    expected_mid = round(last_close + skew, 2)
+    # 2. Volatility regime scaling
+    #    Use 20-day realised volatility (annualised) as a regime indicator.
+    #    Low vol  (< 25%)  → scale down by 0.85 (calm market, tighter range)
+    #    High vol (> 50%)  → scale up   by 1.20 (wild market, wider range)
+    #    Normal   (25–50%) → no change  (1.00)
+    daily_returns    = close.pct_change().dropna()
+    realized_vol_ann = float(daily_returns.tail(20).std() * (252 ** 0.5) * 100)
+    if realized_vol_ann < 25:
+        vol_regime_scale = 0.85
+    elif realized_vol_ann > 50:
+        vol_regime_scale = 1.20
+    else:
+        vol_regime_scale = 1.00
 
-    # Support / resistance
+    atr_factor    = confidence_scale * vol_regime_scale
+    raw_low       = last_close - atr_factor * atr_14
+    raw_high      = last_close + atr_factor * atr_14
+
+    # 3. Support / resistance levels (computed before capping)
     support_1    = round(bb_lower, 2)
     support_2    = round(sma200, 2)
     resistance_1 = round(bb_upper, 2)
     resistance_2 = round(max(sma50, sma20), 2)
+
+    # 3a. Cap range at nearest S/R — stops the range from blowing past real levels.
+    #     Only apply if S/R is WITHIN the raw range (don't tighten past last_close).
+    nearest_support    = max(s for s in [support_1, support_2] if s < last_close) \
+                         if any(s < last_close for s in [support_1, support_2]) else raw_low
+    nearest_resistance = min(r for r in [resistance_1, resistance_2] if r > last_close) \
+                         if any(r > last_close for r in [resistance_1, resistance_2]) else raw_high
+
+    expected_low  = round(max(raw_low,  nearest_support),    2)
+    expected_high = round(min(raw_high, nearest_resistance), 2)
+
+    # Bias-adjusted midpoint (slight skew toward signal direction)
+    skew         = (total_score / len(signals)) * atr_14 * 0.3
+    expected_mid = round(last_close + skew, 2)
+    # Keep mid inside the capped range
+    expected_mid = round(max(expected_low, min(expected_mid, expected_high)), 2)
 
     return {
         "ticker":         ticker,
@@ -300,6 +335,8 @@ def forecast_ticker(
         "expected_high":  expected_high,
         "expected_mid":   expected_mid,
         "atr_14":         round(atr_14, 2),
+        "atr_factor":     round(atr_factor, 3),
+        "realized_vol_pct": round(realized_vol_ann, 1),
         "rsi_14":         round(rsi_14, 1),
         "rsi_21":         round(rsi_21, 1),
         "sma20":          round(sma20, 2),
@@ -445,16 +482,25 @@ def weekly_forecast(
     last_date = datetime.date.fromisoformat(base["last_date"])
     trading_days = _next_trading_days(last_date, n=5)
 
-    atr   = base["atr_14"]
-    mid0  = base["last_close"]
+    atr        = base["atr_14"]
+    atr_factor = base.get("atr_factor", 1.0)   # use same confidence+vol scaling as single-session
+    mid0       = base["last_close"]
     skew_per_day = (base["total_score"] / len(base["signals"])) * atr * 0.3
+
+    # S/R boundaries from base forecast
+    s1 = base.get("support_1",    mid0 * 0.85)
+    s2 = base.get("support_2",    mid0 * 0.80)
+    r1 = base.get("resistance_1", mid0 * 1.15)
+    r2 = base.get("resistance_2", mid0 * 1.10)
+    floor   = max(s for s in [s1, s2] if s < mid0) if any(s < mid0 for s in [s1, s2]) else mid0 * 0.85
+    ceiling = min(r for r in [r1, r2] if r > mid0) if any(r > mid0 for r in [r1, r2]) else mid0 * 1.15
 
     daily = []
     for i, day in enumerate(trading_days, start=1):
-        scale = math.sqrt(i)          # volatility scales with sqrt(time)
+        scale = math.sqrt(i)
         mid   = round(mid0 + skew_per_day * i, 2)
-        low   = round(mid - atr * scale, 2)
-        high  = round(mid + atr * scale, 2)
+        low   = round(max(mid - atr_factor * atr * scale, floor),   2)
+        high  = round(min(mid + atr_factor * atr * scale, ceiling), 2)
         daily.append({
             "day":    i,
             "date":   str(day),

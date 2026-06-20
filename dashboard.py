@@ -840,8 +840,10 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
             c4.metric("ATR (volatility)", f"${f['atr_14']:,.2f}")
 
             st.caption(
-                f"Range built from 14-day Average True Range (ATR = ${f['atr_14']:.2f}). "
-                f"The midpoint is skewed {f['overall_bias'].lower()} by signal consensus."
+                f"Range built from ATR ${f['atr_14']:.2f} × {f.get('atr_factor', 1.0):.2f} effective factor "
+                f"(signal confidence + volatility regime scaling). "
+                f"Realised 20-day vol: {f.get('realized_vol_pct', 0):.1f}%. "
+                f"Range capped at nearest support/resistance levels."
             )
 
             # -- Sentiment influence callout -----------------------------------
