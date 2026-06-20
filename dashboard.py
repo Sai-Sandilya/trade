@@ -659,13 +659,31 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
             line=dict(color=TICKER_COLORS.get(price_ticker, "#888"), width=1.5),
         ))
 
+        # (trigger_prefix, symbol, color, label)
+        # prefix=True  → match any trigger that starts with the string (e.g. KELLY_*)
+        # prefix=False → exact match
         marker_styles = [
-            ("DCA_NORMAL",        "circle",      "#2196F3", "Normal DCA (1x)"),
-            ("BELOW_SMA200_1.5X", "triangle-up", "#FF9800", "Below SMA200 (1.5x)"),
-            ("RSI_OVERSOLD_2X",   "star",        "#F44336", "RSI Oversold (2x)"),
+            # ── Buys ──────────────────────────────────────────────────────────
+            ("DCA_NORMAL",          "circle",         "#2196F3", "Normal DCA (1×)",           False),
+            ("BELOW_SMA200_1.5X",   "triangle-up",    "#FF9800", "Below SMA200 (1.5×)",       False),
+            ("RSI_OVERSOLD_2X",     "star",           "#F44336", "RSI Oversold (2×)",         False),
+            ("RSI_EXTREME_3X",      "star",           "#E91E63", "RSI Extreme (3×)",          False),
+            ("RSI_CRASH_5X",        "star",           "#9C27B0", "RSI Crash (5×)",            False),
+            ("EARNINGS_BEAT_BUY",   "diamond",        "#00BCD4", "Earnings Beat (2×)",        False),
+            ("EARNINGS_PRE_REDUCE", "diamond",        "#607D8B", "Earnings Pre-caution (0.5×)",False),
+            ("ROTATION_BUY",        "triangle-up",    "#009688", "Sector Rotation Buy",       False),
+            ("REBALANCE_BUY",       "triangle-up",    "#8BC34A", "Rebalance Buy",             False),
+            # ── Sells ─────────────────────────────────────────────────────────
+            ("TAKE_PROFIT",         "triangle-down",  "#4CAF50", "Take Profit",               False),
+            ("STOP_LOSS",           "triangle-down",  "#F44336", "Stop Loss",                 False),
+            ("TRAILING_STOP",       "triangle-down",  "#FF5722", "Trailing Stop",             False),
+            ("REBALANCE_SELL",      "triangle-down",  "#795548", "Rebalance Sell",            False),
         ]
-        for trigger, symbol, color, label in marker_styles:
-            sub = t_trades[t_trades["trigger"] == trigger]
+        for trigger, symbol, color, label, prefix in marker_styles:
+            if prefix:
+                sub = t_trades[t_trades["trigger"].str.startswith(trigger, na=False)]
+            else:
+                sub = t_trades[t_trades["trigger"] == trigger]
             if not sub.empty:
                 fig4.add_trace(go.Scatter(
                     x=sub["date"], y=sub["fill_price"],
@@ -744,7 +762,7 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
             color="trigger", barmode="group",
             labels={"budget_usd": "Capital Deployed ($)", "ticker": "Ticker"},
             title="Capital Deployed by Trigger Type",
-            color_discrete_sequence=["#2196F3", "#FF9800", "#F44336"],
+            color_discrete_sequence=px.colors.qualitative.Plotly,
         )
         fig5.update_layout(height=350, margin=dict(l=0, r=0, t=40, b=0))
         st.plotly_chart(fig5, width='stretch')
