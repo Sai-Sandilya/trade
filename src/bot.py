@@ -375,19 +375,31 @@ class LongTermDCABot:
         shares_value      = sum(self.holdings[t] * prices[t] for t in self.cfg.tickers if t in prices)
         total_after_sells = shares_value + cash_pool
 
+        # Pass 1 — calculate raw deficits for all underweight tickers
+        deficits: dict[str, float] = {}
         for ticker in self.cfg.tickers:
             if ticker not in prices:
                 continue
             current_value = self.holdings[ticker] * prices[ticker]
             target_value  = total_after_sells * targets.get(ticker, 0)
             deficit_value = target_value - current_value
-            if deficit_value > 1.0:  # underweight — buy to top up
+            if deficit_value > 1.0:
+                deficits[ticker] = deficit_value
+
+        # Pass 2 — distribute cash_pool proportionally so buys never exceed proceeds.
+        # This makes the rebalance a true closed system: no fresh cash invented.
+        total_deficit = sum(deficits.values())
+        for ticker, deficit_value in deficits.items():
+            if cash_pool <= 0:
+                break
+            buy_budget = (deficit_value / total_deficit) * cash_pool
+            if buy_budget > 1.0:
                 self._execute_buy(
                     ticker, date, prices[ticker],
                     rsi_map.get(ticker, float("nan")),
                     sma_map.get(ticker, float("nan")),
                     action="REBALANCE_BUY",
-                    forced_budget=deficit_value,
+                    forced_budget=buy_budget,
                     trigger_override="REBALANCE_BUY",
                 )
 
