@@ -138,10 +138,18 @@ def run_comparison(
     from pipeline import clean_all
     from ingestion import ingest_all
 
-    # Download raw data first — comparison can be triggered independently
-    # of the main backtest button, so we can't assume data already exists.
-    ingest_all(tickers)
-    clean_all(tickers)
+    # Collect all tickers needed across presets — sector rotation presets
+    # require the defensive ticker (XLU) which isn't in the user's ticker list.
+    all_tickers = list(tickers)
+    for name in preset_names:
+        p = PRESETS.get(name)
+        if p and p.enable_sector_rotation:
+            defensive = "XLU"   # matches BotConfig.defensive_ticker default
+            if defensive not in all_tickers:
+                all_tickers.append(defensive)
+
+    ingest_all(all_tickers)
+    clean_all(all_tickers)
     results = {}
 
     for name in preset_names:
