@@ -68,13 +68,13 @@ def save_snapshot(
         "total_pnl_pct":      round(float((total_value - total_invested) / total_invested * 100)
                                     if total_invested else 0, 2),
         "num_trades":         int(summary["num_trades"].sum()) if "num_trades" in summary.columns else 0,
-        # Portfolio-level risk metrics
-        "sharpe":             metrics.get("sharpe_ratio"),
-        "sortino":            metrics.get("sortino_ratio"),
-        "max_drawdown_pct":   metrics.get("max_drawdown_pct"),
-        "cagr_pct":           metrics.get("cagr_pct"),
-        "calmar":             metrics.get("calmar_ratio"),
-        "win_rate_pct":       metrics.get("win_rate_pct"),
+        # Portfolio-level risk metrics — keys must match metrics.compute_all() output
+        "sharpe":           metrics.get("sharpe"),
+        "sortino":          metrics.get("sortino"),
+        "max_drawdown_pct": metrics.get("max_drawdown"),   # stored as decimal e.g. -0.23
+        "cagr_pct":         metrics.get("cagr"),           # stored as decimal e.g. 0.15
+        "calmar":           metrics.get("calmar"),
+        "win_rate_pct":     metrics.get("win_rate_monthly"),
     })
 
     new_df = pd.DataFrame(rows)

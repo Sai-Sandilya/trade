@@ -213,9 +213,9 @@ def comparison_metrics_table(results: dict[str, dict]) -> pd.DataFrame:
             "Total Invested":  f"${total_invested:,.0f}",
             "Portfolio Value": f"${total_value:,.0f}",
             "Total P&L":       f"${total_pnl:,.0f} ({total_pnl_pct:+.1f}%)",
-            "CAGR":            f"{m.get('cagr_pct', float('nan')):.1f}%" if m else "—",
-            "Sharpe":          f"{m.get('sharpe_ratio', float('nan')):.2f}" if m else "—",
-            "Max Drawdown":    f"{m.get('max_drawdown_pct', float('nan')):.1f}%" if m else "—",
+            "CAGR":         f"{m.get('cagr',         float('nan')) * 100:.1f}%" if m else "—",
+            "Sharpe":       f"{m.get('sharpe',       float('nan')):.2f}"        if m else "—",
+            "Max Drawdown": f"{m.get('max_drawdown', float('nan')) * 100:.1f}%" if m else "—",
         })
 
     return pd.DataFrame(rows).set_index("Portfolio")
