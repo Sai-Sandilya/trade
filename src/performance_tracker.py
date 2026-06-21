@@ -38,6 +38,14 @@ def save_snapshot(
     cfg_label : human-readable label for this configuration (e.g. "Aggressive")
     """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Reject zero-value snapshots — these come from failed/empty backtests
+    # (e.g. KeyError bug, missing data) and pollute the history chart.
+    total_value_check = float(summary["market_value_usd"].sum()) if "market_value_usd" in summary.columns else 0.0
+    if total_value_check <= 0:
+        logger.warning("save_snapshot: skipping zero-value snapshot (no trades executed)")
+        return
+
     run_ts = datetime.now(tz=timezone.utc).isoformat()
 
     rows = []
