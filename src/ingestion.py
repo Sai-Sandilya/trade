@@ -68,10 +68,27 @@ def _validate_and_save(df: pd.DataFrame, ticker: str) -> Path:
     return dest
 
 
+def _is_parquet_valid(path: Path) -> bool:
+    """Return True if the file exists and can be read as a valid parquet file."""
+    if not path.exists():
+        return False
+    try:
+        pd.read_parquet(path, engine="pyarrow")
+        return True
+    except Exception:
+        return False
+
+
 def ingest_all(tickers: list[str] = TICKERS) -> dict[str, Path]:
     """Download and persist all *tickers*. Returns mapping of ticker → file path."""
     paths: dict[str, Path] = {}
     for ticker in tickers:
+        raw_path = RAW_DIR / f"{ticker}.parquet"
+        # Delete corrupt file before attempting download so the write-verify
+        # loop starts clean rather than reading stale corrupt bytes.
+        if raw_path.exists() and not _is_parquet_valid(raw_path):
+            logger.warning("[%s] Corrupt parquet detected — deleting and re-downloading", ticker)
+            raw_path.unlink()
         df = _download_with_backoff(ticker)
         path = _validate_and_save(df, ticker)
         paths[ticker] = path
