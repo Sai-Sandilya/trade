@@ -1300,14 +1300,16 @@ if run_pipeline or (CLEAN_DIR / "trade_log.csv").exists():
         "A positive sentiment score does not mean the stock will rise."
     )
 
-    # -- Save performance snapshot after every backtest run -------------------
-    try:
-        from performance_tracker import save_snapshot
-        if raw_metrics:
-            _cfg_label = f"${monthly_budget}/mo RSI{oversold_rsi} SMA{below_sma_mult}x"
-            save_snapshot(summary, raw_metrics, equity, cfg_label=_cfg_label)
-    except Exception:
-        pass
+    # -- Save performance snapshot only when user explicitly ran the backtest --
+    # Do NOT save on auto-refresh (every 60s) — only on button click.
+    if needs_run:
+        try:
+            from performance_tracker import save_snapshot
+            if raw_metrics:
+                _cfg_label = f"${monthly_budget}/mo RSI{oversold_rsi} SMA{below_sma_mult}x"
+                save_snapshot(summary, raw_metrics, equity, cfg_label=_cfg_label)
+        except Exception:
+            pass
 
     st.divider()
 
